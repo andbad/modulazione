@@ -1,0 +1,719 @@
+script:
+  # Normale
+  prism_normale:
+    alias: Prism - Normale
+    mode: restart
+    sequence:
+    - service: system_log.write
+      data_template:
+        level: debug
+        logger: homeassistant.components.prism
+        message: >
+                 Script Prism Modulazione Normale - Avvio
+                 - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+    - choose:
+        #Aumento potenza
+        - conditions:
+            - condition: template
+              value_template: >
+                {{
+                (states('switch.prism') == 'on' ) and
+                (states('sensor.potenza_rete')|int < states('input_number.potenza_massima_ritardato')|int-460) and
+                (states('input_number.prism_max_current_limit')|float < state_attr('input_number.prism_max_current_limit','max')|float) and
+                (states('sensor.tensione_rete_r')|int-states('sensor.tensione_rete_s')|int < 28) and
+                (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_s')|int < 28) and
+                (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_r')|int < 28) and
+                (states('sensor.tensione_rete_s')|int-states('sensor.tensione_rete_r')|int < 28) and
+                (states('sensor.tensione_rete_r')|int < 252) and
+                (states('sensor.tensione_rete_t')|int < 252)
+                }}
+          sequence:
+            - service: input_number.set_value
+              data_template:
+                entity_id: input_number.prism_max_current_limit
+                value: >
+                  {{ states('input_number.prism_max_current_limit')|float + 0.5 }}
+            - service: system_log.write
+              data_template:
+                level: debug
+                logger: homeassistant.components.prism
+                message: >
+                         Script Prism Modulazione Normale - Aumento potenza
+                         - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+        #Diminuisco potenza, sempre che non sia già al minimo
+        - conditions:
+            - condition: template
+              value_template: >
+                {{
+                (states('switch.prism') == 'on' ) and
+                (states('input_number.prism_max_current_limit')|float >= state_attr('input_number.prism_max_current_limit','min')|float+0.5) and
+                (
+                  (states('sensor.potenza_rete')|int >= states('input_number.potenza_massima_ritardato')|int-230) or
+                  (states('sensor.tensione_rete_r')|int-states('sensor.tensione_rete_s')|int > 29) or
+                  (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_s')|int > 29) or
+                  (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_r')|int > 29) or
+                  (states('sensor.tensione_rete_s')|int-states('sensor.tensione_rete_r')|int > 29) or
+                  (states('sensor.tensione_rete_r')|int > 253) or
+                  (states('sensor.tensione_rete_t')|int > 253)
+                )
+                }}
+          sequence:
+            - service: input_number.set_value
+              data_template:
+                entity_id: input_number.prism_max_current_limit
+                value: >
+                  {% set corrente = states('input_number.prism_max_current_limit')|float - 0.5 %}
+
+                  {% if corrente|float < state_attr('input_number.prism_max_current_limit','min')|float %}
+                    {% set corrente = state_attr('input_number.prism_max_current_limit','min')|float %}
+                  {% endif %}
+                  {{corrente}}
+
+            - service: system_log.write
+              data_template:
+                level: debug
+                logger: homeassistant.components.prism
+                message: >
+                         Script Prism Modulazione Normale - Dimiuisco potenza
+                         - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+        #Fermo ricarica se devo ridurre potenza ma siamo già al minimo
+        - conditions:
+            - condition: template
+              value_template: >
+                {{
+                    (
+                      (states('switch.prism') == 'on' ) and
+                      (states('input_number.prism_max_current_limit')|float == state_attr('input_number.prism_max_current_limit','min')|float) and
+                      (
+                        (states('sensor.potenza_rete')|int > states('input_number.potenza_massima_ritardato')|int-230) or
+                        (states('sensor.tensione_rete_r')|int-states('sensor.tensione_rete_s')|int > 29) or
+                        (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_s')|int > 29) or
+                        (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_r')|int > 29) or
+                        (states('sensor.tensione_rete_s')|int-states('sensor.tensione_rete_r')|int > 29) or
+                        (states('sensor.tensione_rete_r')|int > 253) or
+                        (states('sensor.tensione_rete_t')|int > 253)
+                      )
+                    ) or (states('sensor.stato_inverter') != "Grid-connected")
+                }}
+          sequence:
+            - service: system_log.write
+              data_template:
+                level: debug
+                logger: homeassistant.components.prism
+                message: >
+                         Script Prism Modulazione Normale - Interrompo la carica e attendo
+                         - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+            - service: switch.turn_off
+              target:
+                entity_id: switch.prism
+
+            #Attendo che la potenza sia disponibile
+            - wait_template: >
+                {{
+                    (
+                        (states('sensor.potenza_rete')|int < states('input_number.potenza_massima_ritardato')|int-460-1800) and
+                        (states('sensor.tensione_rete_r')|int-states('sensor.tensione_rete_s')|int < 28) and
+                        (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_s')|int < 28) and
+                        (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_r')|int < 28) and
+                        (states('sensor.tensione_rete_s')|int-states('sensor.tensione_rete_r')|int < 28) and
+                        (states('sensor.tensione_rete_r')|int < 252) and
+                        (states('sensor.tensione_rete_t')|int < 252) and
+                        (states('sensor.stato_inverter') == "Grid-connected")
+                    ) or
+                    states('switch.prism') == "on"
+                }}
+            #Uscito dal ciclo, riavvio la ricarica
+            - service: system_log.write
+              data_template:
+                level: debug
+                logger: homeassistant.components.prism
+                message: >
+                         Script Prism Modulazione Normale - Riavvio la carica
+                         - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+            - service: switch.turn_on
+              target:
+                entity_id: switch.prism
+            
+            #Attendo che l'auto ricominci ad assorbire
+            - wait_template: "{{ states('sensor.prism_corrente')|int > 4 }}"
+
+            #Aumento la ricarica per evitare che si riblocchi subito
+            - service: input_number.set_value
+              data_template:
+                entity_id: input_number.prism_max_current_limit
+                value: >
+                  {{ states('input_number.prism_max_current_limit')|float + 0.5 }}
+            - service: input_number.set_value
+              data_template:
+                entity_id: input_number.prism_max_current_user
+                value: >
+                  {{ states('input_number.prism_max_current_user')|float }}
+
+            - service: system_log.write
+              data_template:
+                level: debug
+                logger: homeassistant.components.prism
+                message: Automazione Prism Modulazione - riavvio
+    - service: system_log.write
+      data_template:
+        level: debug
+        logger: homeassistant.components.prism
+        message: >
+                 Script Prism Modulazione Normale - Fine
+                 - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+  # Solare
+  prism_solare:
+    alias: Prism - Solare
+    mode: restart
+    sequence:
+    - service: system_log.write
+      data_template:
+        level: debug
+        logger: homeassistant.components.prism
+        message: >
+                 Script Prism Modulazione Solare - Avvio
+                 - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+    - choose:
+        # Se c'è troppa immissione in rete o prelievo/immissione in accumulo, aumenta l'assorbimento
+        - conditions:
+            - condition: template
+              #se immetto in rete + di 230W, oppure immetto in batteria + 230W, oppure immetto/prelievo zero (batteria carica)
+              value_template: >
+                {{
+                (
+                  (states('sensor.potenza_rete')|int < -230) or
+                  (states('sensor.potenza_accumulo_raw')|int > 230)
+                ) and
+                (states('switch.prism') == 'on' ) and
+                (states('input_number.prism_max_current_limit')|float < state_attr('input_number.prism_max_current_limit','max')|int) and
+                (states('sensor.tensione_rete_r')|int-states('sensor.tensione_rete_s')|int < 28) and
+                (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_s')|int < 28) and
+                (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_r')|int < 28) and
+                (states('sensor.tensione_rete_s')|int-states('sensor.tensione_rete_r')|int < 28) and
+                (states('sensor.tensione_rete_r')|int < 252) and
+                (states('sensor.tensione_rete_t')|int < 252)
+                }}
+          sequence:
+            #imposto max_current_user al massimo
+            - service: input_number.set_value
+              data_template:
+                entity_id: input_number.prism_max_current_user
+                value: >
+                  {{state_attr('input_number.prism_max_current_user','max')|int}}
+            #Aumento max_current_limit di mezzo ampere
+            - service: input_number.set_value
+              data_template:
+                entity_id: input_number.prism_max_current_limit
+                value: >
+                  {{ states('input_number.prism_max_current_limit')|float + 0.5 }}
+            - service: system_log.write
+              data_template:
+                level: debug
+                logger: homeassistant.components.prism
+                message: >
+                         Script Prism Modulazione Solare - Aumento potenza
+                         - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+        # Se c'è troppo prelievo da rete o immissione/prelievo da accumulo, riduce l'assorbimento fino a 6A
+        - conditions:
+            - condition: template
+              #se prelevo da rete o da accumulo
+              value_template: >
+                {{
+                (
+                (states('sensor.potenza_rete')|int > 0) or
+                (states('sensor.potenza_accumulo_raw')|int < 0) or
+                (states('sensor.tensione_rete_r')|int-states('sensor.tensione_rete_s')|int > 29) or
+                (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_s')|int > 29) or
+                (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_r')|int > 29) or
+                (states('sensor.tensione_rete_s')|int-states('sensor.tensione_rete_r')|int > 29) or
+                (states('sensor.tensione_rete_r')|int > 253 ) or
+                (states('sensor.tensione_rete_t')|int > 253 )
+                ) and
+                (states('switch.prism') == 'on' ) and
+                (states('input_number.prism_max_current_limit')|float >= state_attr('input_number.prism_max_current_limit','min')|float+0.5)
+                }}
+          sequence:
+            - service: input_number.set_value
+              data_template:
+                entity_id: input_number.prism_max_current_limit
+                value: >
+                  {% set corrente = states('input_number.prism_max_current_limit')|float - 0.5 %}
+                  {% if corrente|float < state_attr('input_number.prism_max_current_limit','min')|float %}
+                    {% set corrente = state_attr('input_number.prism_max_current_limit','min')|float %}
+                  {% endif %}
+                  {{corrente}}
+
+            - service: system_log.write
+              data_template:
+                level: debug
+                logger: homeassistant.components.prism
+                message: >
+                         Script Prism Modulazione Solare - Riduco potenza
+                         - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+        # Se c'è troppo prelievo da rete o immissione/prelievo da accumulo, e l'assorbimento è a 6A, oppure l'inverter è in errore, sospende la ricarica
+        - conditions:
+            - condition: template
+              #se prelevo da rete o da accumulo
+              value_template: >
+                {{
+                    (
+                        (
+                        (states('sensor.potenza_rete')|int > 0) or
+                        (states('sensor.potenza_accumulo_raw')|int < 0) or
+                        (states('sensor.tensione_rete_r')|int-states('sensor.tensione_rete_s')|int > 29) or
+                        (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_s')|int > 29) or
+                        (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_r')|int > 29) or
+                        (states('sensor.tensione_rete_s')|int-states('sensor.tensione_rete_r')|int > 29) or
+                        (states('sensor.tensione_rete_r')|int > 253 ) or
+                        (states('sensor.tensione_rete_t')|int > 253 )
+                        ) and
+                        (states('switch.prism') == 'on' ) and
+                        (states('input_number.prism_max_current_limit')|float == state_attr('input_number.prism_max_current_limit','min')|float)
+                    ) or (states('sensor.stato_inverter') != "Grid-connected")
+                }}
+          sequence:
+            - service: system_log.write
+              data_template:
+                level: debug
+                logger: homeassistant.components.prism
+                message: >
+                         Script Prism Modulazione Solare - Interrompo la ricarica e attendo
+                         - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+            - service: switch.turn_off
+              target:
+                entity_id: switch.prism
+            #Attendo che la potenza sia disponibile
+            - wait_template: >
+                {{
+                    (
+
+                        (
+                          (states('sensor.potenza_rete')|int < -230) or
+                          (states('sensor.potenza_accumulo_raw')|int > 230)
+                        ) and
+                        (states('switch.prism') == 'on' ) and
+                        (states('input_number.prism_max_current_limit')|float < state_attr('input_number.prism_max_current_limit','max')|int) and
+                        (states('sensor.tensione_rete_r')|int-states('sensor.tensione_rete_s')|int < 28) and
+                        (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_s')|int < 28) and
+                        (states('sensor.tensione_rete_t')|int-states('sensor.tensione_rete_r')|int < 28) and
+                        (states('sensor.tensione_rete_s')|int-states('sensor.tensione_rete_r')|int < 28) and
+                        (states('sensor.tensione_rete_r')|int < 252) and
+                        (states('sensor.tensione_rete_t')|int < 252)
+                    ) and (states('sensor.stato_inverter') != "Grid-connected")
+                }}
+            #Riavvio la ricarica
+            - service: system_log.write
+              data_template:
+                level: debug
+                logger: homeassistant.components.prism
+                message: >
+                         Script Prism Modulazione Solare - Riprendo la ricarica
+                         - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+            - service: switch.turn_on
+              target:
+                entity_id: switch.prism
+            
+            #Attendo che l'auto ricominci ad assorbire
+            - wait_template: "{{ states('sensor.prism_corrente')|int > 4 }}"
+            #Aumento potenza per non farla sospendere subito
+            - service: input_number.set_value
+              data_template:
+                entity_id: input_number.prism_max_current_limit
+                value: >
+                  {{ states('input_number.prism_max_current_limit')|float + 0.5 }}
+            - service: input_number.set_value
+              data_template:
+                entity_id: input_number.prism_max_current_user
+                value: >
+                  {{ states('input_number.prism_max_current_user')|float }}
+
+    - service: system_log.write
+      data_template:
+        level: debug
+        logger: homeassistant.components.prism
+        message: >
+                 Script Prism Modulazione Solare - Fine
+                 - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+
+automation:
+    #Modulazione potenza ricarica
+  - id: prism_modulazione_evo
+    alias: Prism - modulazione EVO
+    description: ""
+    trigger:
+      #Quando l'auto viene collegata
+      - platform: state
+        entity_id:
+          - sensor.prism_stato
+        from: Scollegata
+        id: collegata
+
+      #Se switcho il bypass
+      - platform: state
+        entity_id:
+          - input_boolean.prism_bypass
+
+      #All'avvio
+      - platform: homeassistant
+        event: start
+        id: start
+
+      #Se è uno degli orari, per cambiare la modalità di ricarica
+      - platform: time
+        at: input_datetime.start_ricarica_prism
+        id: start_time
+      - platform: time
+        at: input_datetime.stop_ricarica_prism
+        id: stop_time
+
+    condition:
+        # Controlla che non sia già alla carica massima
+        - condition: template
+          value_template: >
+            {{ states('sensor.leaf_soc')|int < states('input_number.percentuale_massima_ricarica')|int }}
+
+        # Controlla che l'auto sia collegata
+        - condition: template
+          value_template: >
+            {{ states('sensor.prism_stato') != 'Scollegata' }}
+
+        #Controlla che non sia in esecuzione l'automazione dell'A/C 
+        - condition: template
+          value_template: "{{ is_state_attr('automation.leaf_a_c', 'current', 0) }}"
+    action:
+      - service: system_log.write
+        data_template:
+          level: debug
+          logger: homeassistant.components.prism
+          message: >
+                   Automazione Prism Modulazione - Avvio
+                   - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+      - service: system_log.write
+        data_template:
+          level: debug
+          logger: homeassistant.components.prism
+          message: >
+                   Automazione Prism Modulazione - Disattivo script
+                   - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+      #Disattivo script per bloccarli, in caso siano in esecuzione
+      - service: script.turn_off
+        target:
+          entity_id: script.prism_normale
+      
+      - service: script.turn_off
+        target:
+          entity_id: script.prism_solare
+
+
+      - service: system_log.write
+        data_template:
+          level: debug
+          logger: homeassistant.components.prism
+          message: >
+                   Automazione Prism Modulazione - Imposto potenza al minimo
+                   - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+      #imposto potenza al minimo
+      - service: input_number.set_value
+        data_template:
+          entity_id: input_number.prism_max_current_user
+          value: "6"
+      - delay:
+          seconds: 2
+      - service: input_number.set_value
+        data_template:
+          entity_id: input_number.prism_max_current_limit
+          value: "6"
+      - service: system_log.write
+        data_template:
+          level: debug
+          logger: homeassistant.components.prism
+          message: >
+                   Automazione Prism Modulazione - Avvio carica
+                   - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+      #Avvio la carica
+      - service: switch.turn_on
+        target:
+          entity_id: switch.prism
+      - service: system_log.write
+        data_template:
+          level: debug
+          logger: homeassistant.components.prism
+          message: >
+                   Automazione Prism Modulazione - Attendo che inizi la carica
+                   - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+      #Attendo che auto e Prisma negozino e inizi la carica
+      - wait_template: "{{ states('sensor.prism_corrente')|int > 4 }}"
+      - service: system_log.write
+        data_template:
+          level: debug
+          logger: homeassistant.components.prism
+          message: >
+                   Automazione Prism Modulazione - Imposto current user al massimo e limit a 12
+                   - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+      #Imposto max_current_user al massimo
+      - service: input_number.set_value
+        data_template:
+          entity_id: input_number.prism_max_current_user
+          value: >
+            {{state_attr('input_number.prism_max_current_user','max')|int(default=8)}}
+
+      - delay:
+          seconds: 5
+      #Imposto max_current_limit a 12, per stabilizzare inverter
+      - service: input_number.set_value
+        data_template:
+          entity_id: input_number.prism_max_current_limit
+          value: "12"
+      - service: system_log.write
+        data_template:
+          level: debug
+          logger: homeassistant.components.prism
+          message: >
+                   Automazione Prism Modulazione - Attendo un minuto per iniziare la modulazione
+                   - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+      #Ripeto finché non scollego il cavo, spengo prism o supero il SOC indicato  
+      - repeat:
+          until:
+            - condition: template
+              value_template: >
+                {{
+                  (states('sensor.prism_stato') == "Scollegata") or
+                  (states('switch.prism') == "off") or
+                  (states('sensor.leaf_soc')|int >= states('input_number.percentuale_massima_ricarica')|int)
+                }}
+          sequence:
+            #Intervallo tra i cicli, dev'essere maggiore dell'intervallo di aggiornamento dell'inverter
+            - delay:
+                seconds: 16
+            - choose:
+                # Se SOC massimo e Prism accesa, interrompo
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{ states('sensor.leaf_soc')|int >= states('input_number.percentuale_massima_ricarica')|int }}
+                    - condition: template
+                      value_template: >
+                        {{ states('switch.prism') == "on" }}
+                  sequence:
+                      - service: system_log.write
+                        data_template:
+                          level: debug
+                          logger: homeassistant.components.prism
+                          message: >
+                                   Automazione Prism Modulazione - SOC massimo raggiunto
+                                   - {{states('sensor.leaf_soc')}}%
+
+                      - service: input_number.set_value
+                        data_template:
+                          entity_id: input_number.prism_max_current_user
+                          value: >
+                            {{state_attr('input_number.prism_max_current_user','min')|int}}
+                      - service: input_number.set_value
+                        data_template:
+                          entity_id: input_number.prism_max_current_limit
+                          value: >
+                            {{state_attr('input_number.prism_max_current_limit','min')|int}}
+                      - service: system_log.write
+                        data_template:
+                          level: debug
+                          logger: homeassistant.components.prism
+                          message: >
+                                   Automazione Prism Modulazione - SOC massimo raggiunto, esco
+                                   - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+                      - service: switch.turn_off
+                        target:
+                          entity_id: switch.prism
+
+                # Se bypass attivo, modulo in base a prelievo contatore (rispetta la potenza massima)
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{ states('input_boolean.prism_bypass')=='on' }}
+                  sequence:
+                      - service: system_log.write
+                        data_template:
+                          level: debug
+                          logger: homeassistant.components.prism
+                          message: >
+                                   Automazione Prism Modulazione - Bypass attivo, modulazione normale
+                                   - {{ states('input_number.prism_max_current_limit') }}A/{{ states('input_number.prism_max_current_user') }}A
+
+                      - service: script.turn_on
+                        entity_id: script.prism_normale
+                      - wait_template: "{{ is_state('script.prism_normale', 'off') }}"
+
+                # Se bypass disattivo e orario diurno, attivo modulazione solare
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{ (states('input_boolean.prism_bypass')=='off') }}
+                    - condition: time
+                      after: input_datetime.stop_ricarica_prism
+                      before: input_datetime.start_ricarica_prism
+                  sequence:
+                      - service: system_log.write
+                        data_template:
+                          level: debug
+                          logger: homeassistant.components.prism
+                          message: >
+                                   Automazione Prism Modulazione - Bypass disattivato, orario diurno, modulazione solare
+                                   - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+                      # Solare
+                      - service: script.turn_on
+                        entity_id: script.prism_solare
+                      - wait_template: "{{ is_state('script.prism_solare', 'off') }}"
+
+                # Se bypass disattivo e orario notturno faccio cose
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{ (states('input_boolean.prism_bypass')=='off') }}
+                    - condition: time
+                      after: input_datetime.start_ricarica_prism
+                      before: input_datetime.stop_ricarica_prism
+                  sequence:
+                      - service: system_log.write
+                        data_template:
+                          level: debug
+                          logger: homeassistant.components.prism
+                          message: >
+                                   Automazione Prism Modulazione - Bypass disattivato, orario notturno, faccio cose
+                                   - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+                      - if:
+                          #Se produzione prevista supera il fabbisogno della casa meno il consumo dell'auto più 5
+                          - condition: template
+                            value_template: >
+                              {{
+                                (states('sensor.previsione_energia_prodotta_oggi')|float 
+                                if now().hour*60 + now().minute > 1110 
+                                else states('sensor.previsione_energia_prodotta_domani')|float) >
+                                (
+                                  state_attr('sensor.consumo_totale_giornaliero','last_period')|float
+                                  - state_attr('sensor.consumo_leaf_giornaliero','last_period')|float
+                                  + (20/100*(states('input_number.percentuale_massima_ricarica')|int-states('sensor.leaf_soc')|int))|round(1)
+                                  + 5
+                                )
+                              }}
+
+                        then:
+                          - service: system_log.write
+                            data_template:
+                              level: debug
+                              logger: homeassistant.components.prism
+                              message: >
+                                       Automazione Prism Modulazione - Produzione FV  sufficiente
+                                       - {{ (states('sensor.previsione_energia_prodotta_oggi')|float 
+                                            if now().hour*60 + now().minute > 1110 
+                                            else states('sensor.previsione_energia_prodotta_domani')|float) }} > {{state_attr('sensor.consumo_totale_giornaliero','last_period')}}-{{state_attr('sensor.consumo_leaf_giornaliero','last_period')}}-5
+
+                          - if:
+                              #Se SOC inferiore a SOC MIN, normale fino a SOC MIN, poi solare
+                              - condition: template
+                                value_template: >
+                                  {{
+                                    states('sensor.leaf_soc')|int <
+                                    states('input_number.percentuale_minima_ricarica')|int
+                                  }}
+                            then:
+                              - service: system_log.write
+                                data_template:
+                                  level: debug
+                                  logger: homeassistant.components.prism
+                                  message: >
+                                           Automazione Prism Modulazione - SOC < % minima ricarica, modulazione normale
+                                           - {{states('sensor.leaf_soc')}}%<{{states('input_number.percentuale_minima_ricarica')}}%
+
+                              # Normale
+                              - service: script.turn_on
+                                entity_id: script.prism_normale
+                              - wait_template: "{{ is_state('script.prism_normale', 'off') }}"
+
+                            else:
+                              - service: system_log.write
+                                data_template:
+                                  level: debug
+                                  logger: homeassistant.components.prism
+                                  message: >
+                                           Automazione Prism Modulazione - SOC > % minima ricarica, modulazione solare
+                                           - {{states('sensor.leaf_soc')}}%>{{states('input_number.percentuale_minima_ricarica')}}%
+
+                              # Solare
+                              - service: script.turn_on
+                                entity_id: script.prism_solare
+                              - wait_template: "{{ is_state('script.prism_solare', 'off') }}"
+                        else:
+                          #oggi ci sarà poca produzione, ricarico da rete
+                          - service: system_log.write
+                            data_template:
+                              level: debug
+                              logger: homeassistant.components.prism
+                              message: >
+                                       Automazione Prism Modulazione - Produzione FV NON sufficiente
+                                       - {{ (states('sensor.previsione_energia_prodotta_oggi')|float 
+                                            if now().hour*60 + now().minute > 1110 
+                                            else states('sensor.previsione_energia_prodotta_domani')|float) }} < {{state_attr('sensor.consumo_totale_giornaliero','last_period')}}-{{state_attr('sensor.consumo_leaf_giornaliero','last_period')}}-5
+
+                          # Normale
+                          - service: script.turn_on
+                            entity_id: script.prism_normale
+                          - wait_template: "{{ is_state('script.prism_normale', 'off') }}"
+
+      - service: system_log.write
+        data_template:
+          level: debug
+          logger: homeassistant.components.prism
+          message: >
+                   Automazione Prism Modulazione - Esco dal ciclo
+                   - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+      # Uscendo dal ciclo, attendo
+      - delay:
+          seconds: 30
+
+      # disattivo script, in caso siano rimasti in funzione
+      - service: script.turn_off
+        entity_id: script.prism_normale
+      - service: script.turn_off
+        entity_id: script.prism_solare
+
+      #Spengo prims
+      - service: switch.turn_off
+        target:
+          entity_id: switch.prism
+
+      # Riduco l'assorbimento a 6A
+      - service: input_number.set_value
+        data_template:
+          entity_id: input_number.prism_max_current_user
+          value: "6"
+      - service: input_number.set_value
+        data_template:
+          entity_id: input_number.prism_max_current_limit
+          value: "6"
+      - service: system_log.write
+        data_template:
+          level: debug
+          logger: homeassistant.components.prism
+          message: >
+                   Automazione Prism Modulazione - Fine
+                   - {{states('input_number.prism_max_current_limit')}}A/{{states('input_number.prism_max_current_user')}}A
+
+    mode: restart
